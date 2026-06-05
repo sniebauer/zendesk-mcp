@@ -32,7 +32,7 @@ export async function runSetup(): Promise<void> {
   console.log("Zendesk MCP — setup\n");
   console.log("This will write credentials to " + CONFIG_PATH + " (mode 0600).");
   console.log("Get a Zendesk API token at:");
-  console.log("  https://<your-subdomain>.zendesk.com/admin/apps-integrations/apis/zendesk-api\n");
+  console.log("  https://<your-subdomain>.zendesk.com/admin/apps-integrations/apis/api-tokens\n");
 
   const existing = await loadExisting();
   const rl = createInterface({ input, output });

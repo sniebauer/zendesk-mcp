@@ -38,7 +38,7 @@ Local [MCP](https://modelcontextprotocol.io/) server that exposes Zendesk Suppor
    You'll be prompted for:
    - **Zendesk subdomain** — the part before `.zendesk.com` (e.g. if your help URL is `acme.zendesk.com`, enter `acme`).
    - **Your Zendesk email** — the address tied to your Zendesk account.
-   - **API token** — generate one at `https://<your-subdomain>.zendesk.com/admin/apps-integrations/apis/zendesk-api`.
+   - **API token** — generate one at `https://<your-subdomain>.zendesk.com/admin/apps-integrations/apis/api-tokens`.
 
    Credentials are written to `~/.config/zendesk-mcp/config.json` with mode `0600` (readable only by you).
 
