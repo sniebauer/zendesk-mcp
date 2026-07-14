@@ -61,6 +61,7 @@ Re-run `npx -y @sniebauer/zendesk-mcp setup` anytime. The CLI offers `(unchanged
 
 **Write tickets**
 - `zd_create_ticket`, `zd_update_ticket`, `zd_add_ticket_comment`
+- `zd_update_ticket` supports `custom_fields: [{id, value}]` for direct custom-field updates (preferred over tag-based workarounds; use `null` to clear a field)
 
 **Reporting**
 - `zd_list_view_tickets`, `zd_incremental_tickets`

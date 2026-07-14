@@ -69,6 +69,33 @@ describe("ticket schemas", () => {
     });
   });
 
+  it("zd_update_ticket accepts custom_fields as [{id, value}] pairs", () => {
+    expect(
+      updateTicketInput.parse({
+        id: 1,
+        custom_fields: [
+          { id: 360000123456, value: "escalated" },
+          { id: 360000654321, value: null },
+        ],
+      })
+    ).toEqual({
+      id: 1,
+      custom_fields: [
+        { id: 360000123456, value: "escalated" },
+        { id: 360000654321, value: null },
+      ],
+    });
+  });
+
+  it("zd_update_ticket custom_fields alone satisfies the mutable-field requirement", () => {
+    expect(() =>
+      updateTicketInput.parse({
+        id: 1,
+        custom_fields: [{ id: 1, value: "x" }],
+      })
+    ).not.toThrow();
+  });
+
   it("zd_add_ticket_comment defaults public=false", () => {
     expect(addTicketCommentInput.parse({ id: 1, body: "note" })).toEqual({
       id: 1,

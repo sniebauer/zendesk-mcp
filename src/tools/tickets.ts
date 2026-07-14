@@ -31,12 +31,33 @@ const ticketStatus = z.enum([
   "closed",
 ]);
 
+const customFieldValue = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.array(z.string()),
+  z.null(),
+]);
+
+const customFieldEntry = z.object({
+  id: z.number().int().positive().describe("Custom field ID (from the Zendesk admin ticket field config)"),
+  value: customFieldValue.describe(
+    "New value for the field. Use null to clear it. Multiselect/checkbox fields take an array of tag-like strings."
+  ),
+});
+
 const updateTicketBase = z.object({
   id: ticketId,
   status: ticketStatus.optional(),
   priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
   assignee_id: z.number().int().positive().optional(),
   tags: z.array(z.string()).optional(),
+  custom_fields: z
+    .array(customFieldEntry)
+    .optional()
+    .describe(
+      "Custom ticket field updates as [{id, value}] pairs. Only listed fields are touched; omitted custom fields are left as-is."
+    ),
 });
 
 export const updateTicketInput = updateTicketBase.refine(
@@ -44,8 +65,12 @@ export const updateTicketInput = updateTicketBase.refine(
     v.status !== undefined ||
     v.priority !== undefined ||
     v.assignee_id !== undefined ||
-    v.tags !== undefined,
-  { message: "Must set at least one of: status, priority, assignee_id, tags" }
+    v.tags !== undefined ||
+    v.custom_fields !== undefined,
+  {
+    message:
+      "Must set at least one of: status, priority, assignee_id, tags, custom_fields",
+  }
 );
 
 export const addTicketCommentInput = z.object({
@@ -115,13 +140,19 @@ export function registerTicketTools(server: McpServer) {
 
   server.tool(
     "zd_update_ticket",
-    "Update fields on an existing Zendesk ticket. Must supply at least one of: status, priority, assignee_id, tags. Use zd_add_ticket_comment to add a comment.",
+    "Update fields on an existing Zendesk ticket. Must supply at least one of: status, priority, assignee_id, tags, custom_fields. Pass custom_fields as [{id, value}] to set custom ticket fields directly (preferred over tag-based workarounds). Use zd_add_ticket_comment to add a comment.",
     updateTicketBase.shape,
     async (raw) => {
       const { id, ...fields } = updateTicketInput.parse(raw);
       const client = createZendeskClient();
       const { result } = await withZendeskError(() =>
-        client.tickets.update(id, { ticket: fields })
+        // node-zendesk types custom field values as string|number|boolean, but
+        // the Zendesk REST API also accepts string[] (multiselect/checkbox) and
+        // null (to clear a field). Cast to the client's payload type so our
+        // broader-but-API-correct schema still type-checks.
+        client.tickets.update(id, {
+          ticket: fields,
+        } as Parameters<typeof client.tickets.update>[1])
       );
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
