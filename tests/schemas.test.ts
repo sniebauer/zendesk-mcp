@@ -5,6 +5,8 @@ import {
   createTicketInput,
   updateTicketInput,
   addTicketCommentInput,
+  listTicketFieldsInput,
+  summarizeTicketField,
 } from "../src/tools/tickets.js";
 import {
   getUserInput,
@@ -94,6 +96,56 @@ describe("ticket schemas", () => {
         custom_fields: [{ id: 1, value: "x" }],
       })
     ).not.toThrow();
+  });
+
+  it("zd_list_ticket_fields takes no arguments", () => {
+    expect(listTicketFieldsInput.parse({})).toEqual({});
+  });
+
+  it("summarizeTicketField projects id/title/type/active/required + options", () => {
+    expect(
+      summarizeTicketField({
+        id: 360000123456,
+        title: "Escalation Reason",
+        type: "tagger",
+        active: true,
+        required: false,
+        custom_field_options: [
+          { name: "Billing dispute", value: "billing_dispute" },
+          { name: "Bug", value: "bug" },
+        ],
+        // extra raw fields (raw_title, description, etc.) should be dropped
+        ...({ raw_title: "ignored", description: "ignored" } as object),
+      } as never)
+    ).toEqual({
+      id: 360000123456,
+      title: "Escalation Reason",
+      type: "tagger",
+      active: true,
+      required: false,
+      options: [
+        { name: "Billing dispute", value: "billing_dispute" },
+        { name: "Bug", value: "bug" },
+      ],
+    });
+  });
+
+  it("summarizeTicketField omits options for fields without them", () => {
+    expect(
+      summarizeTicketField({
+        id: 1,
+        title: "Subject",
+        type: "subject",
+        active: true,
+        required: true,
+      })
+    ).toEqual({
+      id: 1,
+      title: "Subject",
+      type: "subject",
+      active: true,
+      required: true,
+    });
   });
 
   it("zd_add_ticket_comment defaults public=false", () => {
