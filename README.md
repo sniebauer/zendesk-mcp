@@ -2,7 +2,7 @@
 
 Local [MCP](https://modelcontextprotocol.io/) server that exposes Zendesk Support, Macros, attachments, and Help Center reads to Claude Desktop or Claude Code.
 
-23 tools across Support API (search, tickets, users, organizations, macros, attachments, reporting) and the Zendesk Guide Help Center (search, articles, sections).
+24 tools across Support API (search, tickets, users, organizations, macros, attachments, reporting) and the Zendesk Guide Help Center (search, articles, sections).
 
 ## Install
 
@@ -52,16 +52,17 @@ Same as above, but the config file is `~/.claude.json` (and the equivalent proje
 
 Re-run `npx -y @sniebauer/zendesk-mcp setup` anytime. The CLI offers `(unchanged)` defaults for fields you've already configured.
 
-## Tools (23)
+## Tools (24)
 
 **Search / read**
 - `zd_search` — generic Zendesk search (e.g. `type:ticket status:open`)
 - `zd_get_ticket` — ticket + comments + attachment metadata
+- `zd_list_ticket_fields` — list ticket fields (system + custom) with ids, titles, types, and dropdown/multiselect options; use it to resolve a field name to the id needed by `zd_update_ticket`
 - `zd_get_user`, `zd_get_organization`
 
 **Write tickets**
 - `zd_create_ticket`, `zd_update_ticket`, `zd_add_ticket_comment`
-- `zd_update_ticket` supports `custom_fields: [{id, value}]` for direct custom-field updates (preferred over tag-based workarounds; use `null` to clear a field)
+- `zd_update_ticket` supports `custom_fields: [{id, value}]` for direct custom-field updates (preferred over tag-based workarounds; use `null` to clear a field). Use `zd_list_ticket_fields` to look up a field's id by name.
 
 **Reporting**
 - `zd_list_view_tickets`, `zd_incremental_tickets`

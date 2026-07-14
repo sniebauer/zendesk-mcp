@@ -73,6 +73,49 @@ export const updateTicketInput = updateTicketBase.refine(
   }
 );
 
+export const listTicketFieldsInput = z.object({});
+
+type RawTicketField = {
+  id: number;
+  title: string;
+  type: string;
+  active?: boolean;
+  required?: boolean;
+  custom_field_options?: Array<{ name?: string; value?: string }> | null;
+};
+
+type TicketFieldSummary = {
+  id: number;
+  title: string;
+  type: string;
+  active?: boolean;
+  required?: boolean;
+  options?: Array<{ name?: string; value?: string }>;
+};
+
+/**
+ * Projects a Zendesk ticket field down to the fields useful for resolving a
+ * name/title to the numeric id that zd_update_ticket's custom_fields needs.
+ * Dropdown/multiselect (tagger/multiselect) fields also expose their allowed
+ * options so a human-readable value can be mapped to the stored tag value.
+ */
+export function summarizeTicketField(field: RawTicketField): TicketFieldSummary {
+  const summary: TicketFieldSummary = {
+    id: field.id,
+    title: field.title,
+    type: field.type,
+    active: field.active,
+    required: field.required,
+  };
+  if (field.custom_field_options && field.custom_field_options.length > 0) {
+    summary.options = field.custom_field_options.map((o) => ({
+      name: o.name,
+      value: o.value,
+    }));
+  }
+  return summary;
+}
+
 export const addTicketCommentInput = z.object({
   id: ticketId,
   body: z.string().min(1).describe("Comment body"),
@@ -105,6 +148,30 @@ export function registerTicketTools(server: McpServer) {
             text: JSON.stringify({ ticket, comments }, null, 2),
           },
         ],
+      };
+    }
+  );
+
+  server.tool(
+    "zd_list_ticket_fields",
+    "List all Zendesk ticket fields (system + custom) with their id, title, type, active flag, and — for dropdown/multiselect fields — the allowed options. Use this to resolve a custom field's name/title to the numeric id required by zd_update_ticket's custom_fields parameter.",
+    listTicketFieldsInput.shape,
+    async (raw) => {
+      listTicketFieldsInput.parse(raw);
+      const client = createZendeskClient();
+      // node-zendesk v5: client.ticketfields.list() resolves to an array of
+      // ticket fields; some endpoints instead wrap in {result}, so handle both.
+      const res: unknown = await withZendeskError(() =>
+        client.ticketfields.list()
+      );
+      const fields = (
+        Array.isArray(res)
+          ? res
+          : ((res as { result?: unknown[] })?.result ?? [])
+      ) as RawTicketField[];
+      const summary = fields.map(summarizeTicketField);
+      return {
+        content: [{ type: "text", text: JSON.stringify(summary, null, 2) }],
       };
     }
   );
