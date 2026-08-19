@@ -21,13 +21,15 @@ Local [MCP](https://modelcontextprotocol.io/) server that exposes Zendesk Suppor
      "mcpServers": {
        "zendesk": {
          "command": "npx",
-         "args": ["-y", "@sniebauer/zendesk-mcp"]
+         "args": ["-y", "--prefer-online", "@sniebauer/zendesk-mcp@latest"]
        }
      }
    }
    ```
 
    (If you already have other `mcpServers`, merge the `zendesk` entry alongside them.)
+
+   `--prefer-online` makes npm check the registry on every launch and `@latest` pins to the newest published tag. Together they keep you current automatically — without both, npx can serve a cached copy and leave you on an old version indefinitely.
 
 3. Capture your Zendesk credentials. Run this once from any terminal:
 
@@ -46,11 +48,66 @@ Local [MCP](https://modelcontextprotocol.io/) server that exposes Zendesk Suppor
 
 ### Claude Code
 
-Same as above, but the config file is `~/.claude.json` (and the equivalent project-scoped path), and Claude Code reloads MCP servers on session restart rather than full app restart.
+Run the credential setup from step 3 above, then register the server:
+
+```bash
+claude mcp add --transport stdio zendesk --scope user -- npx -y --prefer-online @sniebauer/zendesk-mcp@latest
+```
+
+`--scope user` makes it available in every directory rather than only the one you ran the command in. Claude Code reloads MCP servers on session restart rather than full app restart; run `/mcp` to confirm `zendesk` is connected.
 
 ### Updating credentials
 
 Re-run `npx -y @sniebauer/zendesk-mcp setup` anytime. The CLI offers `(unchanged)` defaults for fields you've already configured.
+
+## Updating to the latest version
+
+If your config still uses the older bare `npx -y @sniebauer/zendesk-mcp` form, npx may keep serving a cached build and never pick up new releases. Switch to the auto-updating form once and you'll stay current from then on.
+
+### Claude Desktop
+
+1. **Open the config file.** In Claude Desktop: **Settings** → **Developer** (left sidebar) → **Edit Config**. That opens the folder containing `claude_desktop_config.json` — open that file in any text editor.
+   - If "Edit Config" isn't there, the file lives at `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows).
+
+2. **Find the `zendesk` entry** under `mcpServers`. It probably looks like this:
+
+   ```json
+   "zendesk": {
+     "command": "npx",
+     "args": ["-y", "@sniebauer/zendesk-mcp"]
+   }
+   ```
+
+3. **Change only the `args` line** so it reads:
+
+   ```json
+   "zendesk": {
+     "command": "npx",
+     "args": ["-y", "--prefer-online", "@sniebauer/zendesk-mcp@latest"]
+   }
+   ```
+
+   That's the whole change — adding `--prefer-online` and `@latest`. Leave other servers alone and keep the JSON valid (matching quotes, commas, braces).
+
+4. **Fully quit and reopen Claude Desktop** — not just close the window (macOS: `⌘Q`, or Claude menu → Quit).
+
+5. **Verify.** Start a new chat and check the tools/connector icon near the message box (or **Settings → Developer**) — `zendesk` should show as connected with 24 tools.
+
+### Claude Code
+
+```bash
+claude mcp remove zendesk
+claude mcp add --transport stdio zendesk --scope user -- npx -y --prefer-online @sniebauer/zendesk-mcp@latest
+```
+
+Restart Claude Code, then run `/mcp` to confirm `zendesk` is connected.
+
+### Troubleshooting
+
+- **`zendesk` errors or won't start.** Almost always means the app can't find `npx`. Install Node.js (LTS, from [nodejs.org](https://nodejs.org)), then fully restart the app.
+- **It connects but the new tools are missing.** The npx cache is stale — run `npm cache clean --force`, then fully quit and reopen.
+
+Updating does not touch authentication; your existing credentials keep working.
 
 ## Tools (24)
 
