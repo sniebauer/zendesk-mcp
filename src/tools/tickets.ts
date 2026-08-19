@@ -1,6 +1,56 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createZendeskClient, withZendeskError } from "../zendesk.js";
+import { createZendeskClient, loadConfig, withZendeskError } from "../zendesk.js";
+import type { ZendeskConfig } from "../zendesk.js";
+
+/** Tag stamped on every ticket this MCP modifies, for adoption tracking. */
+export const ACTIONED_TAG = "ai_actioned";
+
+/**
+ * Best-effort: additively stamp {@link ACTIONED_TAG} on a ticket the MCP just
+ * modified.
+ *
+ * Hits Zendesk's additive tags endpoint directly (PUT /tickets/{id}/tags.json
+ * with {tags:[...]}), which appends the tag WITHOUT replacing the ticket's
+ * existing tags. We deliberately do NOT use node-zendesk's
+ * client.tickets.addTags: in v5 it routes the PUT through requestAll(), which
+ * drops the request body, so the call returns 200 but silently adds nothing.
+ *
+ * Never throws: the primary action already succeeded, so a tagging failure must
+ * not turn a successful update into an error — failures are logged to stderr.
+ */
+export async function stampActioned(
+  cfg: ZendeskConfig,
+  id: number
+): Promise<void> {
+  try {
+    const auth = Buffer.from(`${cfg.email}/token:${cfg.token}`).toString(
+      "base64"
+    );
+    const resp = await fetch(
+      `https://${cfg.subdomain}.zendesk.com/api/v2/tickets/${id}/tags.json`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ tags: [ACTIONED_TAG] }),
+      }
+    );
+    if (!resp.ok) {
+      console.error(
+        `[zendesk-mcp] failed to stamp '${ACTIONED_TAG}' on ticket ${id}: HTTP ${resp.status}`
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[zendesk-mcp] failed to stamp '${ACTIONED_TAG}' on ticket ${id}: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
+}
 
 const ticketId = z.number().int().positive().describe("Zendesk ticket ID");
 
@@ -73,6 +123,49 @@ export const updateTicketInput = updateTicketBase.refine(
   }
 );
 
+export const listTicketFieldsInput = z.object({});
+
+type RawTicketField = {
+  id: number;
+  title: string;
+  type: string;
+  active?: boolean;
+  required?: boolean;
+  custom_field_options?: Array<{ name?: string; value?: string }> | null;
+};
+
+type TicketFieldSummary = {
+  id: number;
+  title: string;
+  type: string;
+  active?: boolean;
+  required?: boolean;
+  options?: Array<{ name?: string; value?: string }>;
+};
+
+/**
+ * Projects a Zendesk ticket field down to the fields useful for resolving a
+ * name/title to the numeric id that zd_update_ticket's custom_fields needs.
+ * Dropdown/multiselect (tagger/multiselect) fields also expose their allowed
+ * options so a human-readable value can be mapped to the stored tag value.
+ */
+export function summarizeTicketField(field: RawTicketField): TicketFieldSummary {
+  const summary: TicketFieldSummary = {
+    id: field.id,
+    title: field.title,
+    type: field.type,
+    active: field.active,
+    required: field.required,
+  };
+  if (field.custom_field_options && field.custom_field_options.length > 0) {
+    summary.options = field.custom_field_options.map((o) => ({
+      name: o.name,
+      value: o.value,
+    }));
+  }
+  return summary;
+}
+
 export const addTicketCommentInput = z.object({
   id: ticketId,
   body: z.string().min(1).describe("Comment body"),
@@ -105,6 +198,30 @@ export function registerTicketTools(server: McpServer) {
             text: JSON.stringify({ ticket, comments }, null, 2),
           },
         ],
+      };
+    }
+  );
+
+  server.tool(
+    "zd_list_ticket_fields",
+    "List all Zendesk ticket fields (system + custom) with their id, title, type, active flag, and — for dropdown/multiselect fields — the allowed options. Use this to resolve a custom field's name/title to the numeric id required by zd_update_ticket's custom_fields parameter.",
+    listTicketFieldsInput.shape,
+    async (raw) => {
+      listTicketFieldsInput.parse(raw);
+      const client = createZendeskClient();
+      // node-zendesk v5: client.ticketfields.list() resolves to an array of
+      // ticket fields; some endpoints instead wrap in {result}, so handle both.
+      const res: unknown = await withZendeskError(() =>
+        client.ticketfields.list()
+      );
+      const fields = (
+        Array.isArray(res)
+          ? res
+          : ((res as { result?: unknown[] })?.result ?? [])
+      ) as RawTicketField[];
+      const summary = fields.map(summarizeTicketField);
+      return {
+        content: [{ type: "text", text: JSON.stringify(summary, null, 2) }],
       };
     }
   );
@@ -144,7 +261,8 @@ export function registerTicketTools(server: McpServer) {
     updateTicketBase.shape,
     async (raw) => {
       const { id, ...fields } = updateTicketInput.parse(raw);
-      const client = createZendeskClient();
+      const cfg = loadConfig();
+      const client = createZendeskClient(cfg);
       const { result } = await withZendeskError(() =>
         // node-zendesk types custom field values as string|number|boolean, but
         // the Zendesk REST API also accepts string[] (multiselect/checkbox) and
@@ -154,6 +272,7 @@ export function registerTicketTools(server: McpServer) {
           ticket: fields,
         } as Parameters<typeof client.tickets.update>[1])
       );
+      await stampActioned(cfg, id);
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       };
@@ -166,12 +285,14 @@ export function registerTicketTools(server: McpServer) {
     addTicketCommentInput.shape,
     async (raw) => {
       const { id, body, public: isPublic } = addTicketCommentInput.parse(raw);
-      const client = createZendeskClient();
+      const cfg = loadConfig();
+      const client = createZendeskClient(cfg);
       const { result } = await withZendeskError(() =>
         client.tickets.update(id, {
           ticket: { comment: { body, public: isPublic } },
         })
       );
+      await stampActioned(cfg, id);
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       };
