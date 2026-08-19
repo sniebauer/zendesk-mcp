@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createZendeskClient, withZendeskError } from "../zendesk.js";
+import { createZendeskClient, loadConfig, withZendeskError } from "../zendesk.js";
+import { REVIEWED_TAG, stampTag } from "../tags.js";
 
 const macroId = z.number().int().positive().describe("Zendesk macro ID");
 const ticketId = z.number().int().positive().describe("Zendesk ticket ID");
@@ -75,7 +76,8 @@ export function registerMacroTools(server: McpServer) {
     applyMacroToTicketInput.shape,
     async (raw) => {
       const { ticket_id, macro_id } = applyMacroToTicketInput.parse(raw);
-      const client = createZendeskClient();
+      const cfg = loadConfig();
+      const client = createZendeskClient(cfg);
       // node-zendesk v5: client.macros.applyTicket(ticketID, macroID) hits
       // GET /api/v2/tickets/{ticket_id}/macros/{macro_id}/apply.json
       // and returns the macro "replica" — the would-be ticket+comment changes
@@ -83,6 +85,8 @@ export function registerMacroTools(server: McpServer) {
       const { result } = await withZendeskError(() =>
         client.macros.applyTicket(ticket_id, macro_id)
       );
+      // Preview only — nothing was persisted, so this counts as a review.
+      await stampTag(cfg, ticket_id, REVIEWED_TAG);
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       };

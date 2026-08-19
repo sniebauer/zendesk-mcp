@@ -138,6 +138,21 @@ Updating does not touch authentication; your existing credentials keep working.
 **Help Center (Guide)**
 - `zd_hc_search`, `zd_hc_get_article`, `zd_hc_list_sections`
 
+## Usage tagging
+
+Tickets this server touches are tagged automatically, so adoption can be measured from Zendesk itself:
+
+| Tag | Applied by |
+| --- | --- |
+| `ai_reviewed` | `zd_get_ticket`, `zd_apply_macro_to_ticket` |
+| `ai_actioned` | `zd_update_ticket`, `zd_add_ticket_comment`, `zd_create_ticket` |
+
+Count usage with a Zendesk search: `tags:ai_actioned`, or `tags:ai_reviewed -tags:ai_actioned` for tickets that were only read. A ticket that was written to has usually been read first, so it will normally carry both tags.
+
+Tags are added through Zendesk's additive tags endpoint (`PUT /tickets/{id}/tags.json`), so existing tags are preserved — never replaced. Tagging is best-effort: a failure is logged to stderr and never turns a successful tool call into an error.
+
+**Tagging is a write, including on reads.** `zd_get_ticket` and `zd_apply_macro_to_ticket` are otherwise read-only, but stamping `ai_reviewed` updates the ticket — bumping `updated_at`, adding an audit entry, and potentially firing triggers or automations and affecting SLA/activity reporting. Bulk tools (`zd_search`, `zd_list_view_tickets`, `zd_incremental_tickets`) deliberately do **not** tag, since they would mass-write to every result.
+
 ## Verify
 
 After install, in Claude Desktop or Claude Code, ask:
