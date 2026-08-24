@@ -52,7 +52,24 @@ describe("ticket schemas", () => {
     expect(() => getTicketInput.parse({ id: 0 })).toThrow();
     expect(() => getTicketInput.parse({ id: -5 })).toThrow();
     expect(() => getTicketInput.parse({ id: "abc" })).toThrow();
-    expect(getTicketInput.parse({ id: 12345 })).toEqual({ id: 12345 });
+    // History is on by default; the raw (very large) audits payload is opt-in.
+    expect(getTicketInput.parse({ id: 12345 })).toEqual({
+      id: 12345,
+      include_events: true,
+      include_raw_audits: false,
+    });
+  });
+
+  it("zd_get_ticket lets the caller opt out of history or opt into raw audits", () => {
+    expect(
+      getTicketInput.parse({ id: 1, include_events: false })
+    ).toMatchObject({ include_events: false, include_raw_audits: false });
+    expect(
+      getTicketInput.parse({ id: 1, include_raw_audits: true })
+    ).toMatchObject({ include_events: true, include_raw_audits: true });
+    expect(() =>
+      getTicketInput.parse({ id: 1, include_events: "yes" })
+    ).toThrow();
   });
 
   it("zd_create_ticket requires subject and body", () => {

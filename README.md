@@ -113,7 +113,7 @@ Updating does not touch authentication; your existing credentials keep working.
 
 **Search / read**
 - `zd_search` — generic Zendesk search (e.g. `type:ticket status:open`)
-- `zd_get_ticket` — ticket + comments + attachment metadata
+- `zd_get_ticket` — ticket + comments + `events` (full change history) + attachment metadata
 - `zd_list_ticket_fields` — list ticket fields (system + custom) with ids, titles, types, and dropdown/multiselect options; use it to resolve a field name to the id needed by `zd_update_ticket`
 - `zd_get_user`, `zd_get_organization`
 
@@ -137,6 +137,38 @@ Updating does not touch authentication; your existing credentials keep working.
 
 **Help Center (Guide)**
 - `zd_hc_search`, `zd_hc_get_article`, `zd_hc_list_sections`
+
+## Ticket history (`zd_get_ticket`)
+
+`zd_get_ticket` returns three things: the `ticket` fields, all `comments`, and `events` — a chronological log of everything else that happened, derived from Zendesk's [Ticket Audits API](https://developer.zendesk.com/api-reference/ticketing/tickets/ticket_audits/). Comments alone only ever show what people *said*; `events` shows what was *done*: status, priority, assignee and group changes, tag and CC changes, macros applied, and custom field edits — each with who did it and which trigger or automation drove it.
+
+```json
+{
+  "at": "2026-08-10T22:24:40Z",
+  "actor": "Kevin Sooter",
+  "via": "web",
+  "audit_id": 42621164872727,
+  "kind": "change",
+  "field": "status",
+  "from": "new",
+  "to": "open"
+}
+```
+
+`via` names the responsible rule when one fired (`"trigger: Assign new tickets created without a Group selected to the Support group"`), which is usually the answer to "why did this ticket move?". Custom fields resolve to their title plus a `field_id` you can feed straight back to `zd_update_ticket`'s `custom_fields`.
+
+**Raw audits are summarized, not passed through.** The unfiltered payload is dominated by noise — on one real 86-audit ticket it was 657KB, mostly rendered HTML email bodies from `Notification`/`FollowerNotification` events and whole-list echoes on every `tags` change. The summary drops notification and webhook events, diffs list-valued fields to just what changed, and strips comment bodies (already returned in full under `comments`, and cross-referenced by `comment_id`). That ticket's history comes back as 69KB instead of 657KB.
+
+Two flags control this:
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `include_events` | `true` | The summarized history. Set `false` to skip the audits call entirely — output and latency then match the pre-audits behavior exactly. |
+| `include_raw_audits` | `false` | Adds the unfiltered `audits` array as Zendesk returns it. Large; use only when you need notification bodies or an event type the summary drops. |
+
+Unrecognized event types are passed through as bare `{at, actor, via, kind}` stubs rather than dropped, so a new Zendesk event type shows up as a known unknown instead of silently vanishing.
+
+If the audits call itself fails, the ticket and its comments are still returned and the failure is reported as `events_error` — history is an enrichment, so losing it never costs you the read, and a missing history is never mistaken for an uneventful ticket.
 
 ## Usage tagging
 

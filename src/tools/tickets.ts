@@ -7,10 +7,30 @@ import {
   appendTag,
   stampTag,
 } from "../tags.js";
+import {
+  collectAuthorIds,
+  hasCustomFieldChanges,
+  summarizeAudits,
+  type RawAudit,
+} from "../audits.js";
 
 const ticketId = z.number().int().positive().describe("Zendesk ticket ID");
 
-export const getTicketInput = z.object({ id: ticketId });
+export const getTicketInput = z.object({
+  id: ticketId,
+  include_events: z
+    .boolean()
+    .default(true)
+    .describe(
+      "Include `events`: a compact chronological log of everything that happened to the ticket (status/priority/assignee/group changes, tag and CC changes, macros applied, custom field edits), derived from the Ticket Audits API. Set false to skip the audits call entirely."
+    ),
+  include_raw_audits: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Include the unfiltered `audits` array straight from the Ticket Audits API, notification bodies and all. Very large (hundreds of KB on busy tickets) — prefer the summarized `events`."
+    ),
+});
 
 export const createTicketInput = z.object({
   subject: z.string().min(1).describe("Ticket subject"),
@@ -133,13 +153,107 @@ export const addTicketCommentInput = z.object({
     ),
 });
 
+type ZendeskClient = ReturnType<typeof createZendeskClient>;
+
+/** Zendesk caps the show_many id list; audits never come close, but chunking keeps a pathological ticket from 400ing. */
+const SHOW_MANY_LIMIT = 100;
+
+/**
+ * Ticket fields change rarely and the list is account-wide, so it is cached for
+ * the life of the process behind a short TTL — long enough that a burst of
+ * zd_get_ticket calls costs one lookup, short enough that a newly created field
+ * shows up without a restart.
+ */
+const FIELD_TITLE_TTL_MS = 10 * 60 * 1000;
+let fieldTitleCache: { at: number; titles: Map<number, string> } | undefined;
+
+/** Author names are stable, so resolved ids are memoized for the process lifetime and only the misses are fetched. */
+const actorNameCache = new Map<number, string>();
+
+/**
+ * Resolves audit author ids to display names.
+ *
+ * Best-effort by design: this decorates a read that has already succeeded, so a
+ * failure here degrades `actor` to a raw numeric id rather than failing the
+ * whole tool call.
+ */
+async function resolveActors(
+  client: ZendeskClient,
+  ids: number[]
+): Promise<Map<number, string>> {
+  const resolved = new Map<number, string>();
+  const missing: number[] = [];
+  for (const id of ids) {
+    const cached = actorNameCache.get(id);
+    if (cached === undefined) missing.push(id);
+    else resolved.set(id, cached);
+  }
+  if (missing.length === 0) return resolved;
+
+  try {
+    for (let i = 0; i < missing.length; i += SHOW_MANY_LIMIT) {
+      const chunk = missing.slice(i, i + SHOW_MANY_LIMIT);
+      const res: unknown = await client.users.showMany(chunk);
+      const users = (
+        Array.isArray(res) ? res : ((res as { result?: unknown[] })?.result ?? [])
+      ) as Array<{ id?: number; name?: string }>;
+      for (const user of users) {
+        if (typeof user.id !== "number" || !user.name) continue;
+        actorNameCache.set(user.id, user.name);
+        resolved.set(user.id, user.name);
+      }
+    }
+  } catch (err) {
+    console.error(
+      `[zendesk-mcp] could not resolve audit author names: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
+  return resolved;
+}
+
+/**
+ * Resolves numeric custom-field ids to their titles.
+ *
+ * Same best-effort contract as {@link resolveActors}: on failure the summary
+ * keeps the raw numeric field id, which is still usable with zd_update_ticket.
+ */
+async function resolveFieldTitles(
+  client: ZendeskClient
+): Promise<Map<number, string>> {
+  const now = Date.now();
+  if (fieldTitleCache && now - fieldTitleCache.at < FIELD_TITLE_TTL_MS) {
+    return fieldTitleCache.titles;
+  }
+  const titles = new Map<number, string>();
+  try {
+    const res: unknown = await client.ticketfields.list();
+    const fields = (
+      Array.isArray(res) ? res : ((res as { result?: unknown[] })?.result ?? [])
+    ) as RawTicketField[];
+    for (const field of fields) {
+      if (typeof field.id === "number" && field.title) titles.set(field.id, field.title);
+    }
+    fieldTitleCache = { at: now, titles };
+  } catch (err) {
+    console.error(
+      `[zendesk-mcp] could not resolve custom field titles: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
+  return titles;
+}
+
 export function registerTicketTools(server: McpServer) {
   server.tool(
     "zd_get_ticket",
-    "Fetch a single Zendesk ticket by ID, including its comments. Returns ticket fields, all comments (public + internal), and basic requester/assignee info.",
+    "Fetch a single Zendesk ticket by ID, including its full history. Returns ticket fields, all comments (public + internal), and `events` — a compact chronological log of everything else that happened: status, priority, assignee and group changes, tag and CC changes, macros applied, and custom field edits, each with who did it and which trigger or automation drove it. Use this to answer 'what happened on this ticket and where does it stand'. Pass include_events:false to skip the history, or include_raw_audits:true for the unfiltered Ticket Audits payload.",
     getTicketInput.shape,
     async (raw) => {
-      const { id } = getTicketInput.parse(raw);
+      const { id, include_events, include_raw_audits } =
+        getTicketInput.parse(raw);
       const cfg = loadConfig();
       const client = createZendeskClient(cfg);
       const { result: ticket } = await withZendeskError(() =>
@@ -148,12 +262,50 @@ export function registerTicketTools(server: McpServer) {
       const comments = await withZendeskError(() =>
         client.tickets.getComments(id)
       );
+
+      const payload: Record<string, unknown> = { ticket, comments };
+
+      // Skipped entirely when neither view is requested, so opting out costs
+      // nothing — the tool then behaves exactly as it did before audits existed.
+      let audits: RawAudit[] | undefined;
+      if (include_events || include_raw_audits) {
+        try {
+          audits = (await withZendeskError(() =>
+            client.ticketaudits.list(id)
+          )) as RawAudit[];
+        } catch (err) {
+          // History is an enrichment on top of a read that has already
+          // succeeded, so a failure here (rate limit, permissions, a timeout on
+          // a very long ticket) must not cost the caller the ticket and its
+          // comments. Report it in-band instead of throwing, so an absent
+          // history is never mistaken for an uneventful ticket.
+          payload.events_error =
+            err instanceof Error ? err.message : String(err);
+        }
+      }
+
+      if (audits) {
+        if (include_events) {
+          const [actors, fields] = await Promise.all([
+            resolveActors(client, collectAuthorIds(audits)),
+            hasCustomFieldChanges(audits)
+              ? resolveFieldTitles(client)
+              : Promise.resolve(new Map<number, string>()),
+          ]);
+          payload.events = summarizeAudits(audits, {
+            resolveActor: (authorId) => actors.get(authorId),
+            resolveField: (fieldId) => fields.get(fieldId),
+          });
+        }
+        if (include_raw_audits) payload.audits = audits;
+      }
+
       await stampTag(cfg, id, REVIEWED_TAG);
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify({ ticket, comments }, null, 2),
+            text: JSON.stringify(payload, null, 2),
           },
         ],
       };
