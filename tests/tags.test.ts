@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   ACTIONED_TAG,
   REVIEWED_TAG,
+  addTags,
   appendTag,
   stampTag,
 } from "../src/tags.js";
@@ -67,6 +68,45 @@ describe("stampTag", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(stampTag(cfg, 7, REVIEWED_TAG)).resolves.toBeUndefined();
     expect(errSpy).toHaveBeenCalled();
+  });
+});
+
+describe("addTags", () => {
+  it("PUTs only the new tags to the additive endpoint and returns the merged set", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ tags: ["existing", "escalated", "val_filed"] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tags = await addTags(cfg, 275807, ["escalated", "val_filed"]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://acme.zendesk.com/api/v2/tickets/275807/tags.json");
+    expect(opts.method).toBe("PUT");
+    // The whole point of this tool: the body carries only what to add, so the
+    // ticket's existing tags survive. A `tags` replace via zd_update_ticket
+    // would wipe them.
+    expect(JSON.parse(String(opts.body))).toEqual({
+      tags: ["escalated", "val_filed"],
+    });
+    expect(tags).toEqual(["existing", "escalated", "val_filed"]);
+  });
+
+  it("throws on a non-2xx response, surfacing Zendesk's message", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 422,
+        text: async () => '{"error":"RecordInvalid"}',
+      })
+    );
+    // Unlike stampTag, this IS the caller's action, so a failure must not be
+    // swallowed — silently adding nothing is the bug we are fixing.
+    await expect(addTags(cfg, 7, ["x"])).rejects.toThrow(/422/);
   });
 });
 

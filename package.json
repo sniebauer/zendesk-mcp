@@ -1,7 +1,7 @@
 {
   "name": "@sniebauer/zendesk-mcp",
-  "version": "0.5.0",
-  "description": "Local MCP server exposing Zendesk Support, Macros, attachments, and Help Center reads to Claude Desktop and Claude Code. 24 tools.",
+  "version": "0.6.0",
+  "description": "Local MCP server exposing Zendesk Support, Macros, attachments, and Help Center reads to Claude Desktop and Claude Code. 25 tools.",
   "type": "module",
   "bin": {
     "zendesk-mcp": "dist/index.js"

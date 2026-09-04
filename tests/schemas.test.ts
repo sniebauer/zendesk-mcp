@@ -5,6 +5,7 @@ import {
   createTicketInput,
   updateTicketInput,
   addTicketCommentInput,
+  addTicketTagsInput,
   listTicketFieldsInput,
   summarizeTicketField,
 } from "../src/tools/tickets.js";
@@ -113,6 +114,77 @@ describe("ticket schemas", () => {
         custom_fields: [{ id: 1, value: "x" }],
       })
     ).not.toThrow();
+  });
+
+  it("zd_update_ticket accepts the Problem/Incident routing fields", () => {
+    expect(
+      updateTicketInput.parse({
+        id: 1,
+        type: "incident",
+        problem_id: 275807,
+        group_id: 360001,
+        ticket_form_id: 360002,
+      })
+    ).toEqual({
+      id: 1,
+      type: "incident",
+      problem_id: 275807,
+      group_id: 360001,
+      ticket_form_id: 360002,
+    });
+  });
+
+  it("zd_update_ticket accepts each routing field on its own", () => {
+    for (const field of [
+      { type: "problem" },
+      { problem_id: 42 },
+      { group_id: 42 },
+      { ticket_form_id: 42 },
+    ]) {
+      expect(() => updateTicketInput.parse({ id: 1, ...field })).not.toThrow();
+    }
+  });
+
+  it("zd_update_ticket rejects an unknown ticket type", () => {
+    expect(() => updateTicketInput.parse({ id: 1, type: "bug" })).toThrow();
+  });
+
+  it("zd_update_ticket allows problem_id: null to detach an incident", () => {
+    expect(updateTicketInput.parse({ id: 1, problem_id: null })).toEqual({
+      id: 1,
+      problem_id: null,
+    });
+  });
+
+  it("zd_update_ticket rejects problem_id paired with a non-incident type", () => {
+    // Zendesk only allows problem_id on an incident; catching it here beats a
+    // opaque RecordInvalid from the API.
+    expect(() =>
+      updateTicketInput.parse({ id: 1, type: "task", problem_id: 5 })
+    ).toThrow();
+    expect(() =>
+      updateTicketInput.parse({ id: 1, type: "incident", problem_id: 5 })
+    ).not.toThrow();
+    // type omitted: the ticket may already be an incident, so allow it.
+    expect(() =>
+      updateTicketInput.parse({ id: 1, problem_id: 5 })
+    ).not.toThrow();
+  });
+
+  it("zd_update_ticket rejects a zero or negative problem_id", () => {
+    expect(() => updateTicketInput.parse({ id: 1, problem_id: 0 })).toThrow();
+    expect(() => updateTicketInput.parse({ id: 1, problem_id: -3 })).toThrow();
+  });
+
+  it("zd_add_ticket_tags requires an id and at least one non-empty tag", () => {
+    expect(() => addTicketTagsInput.parse({ id: 1 })).toThrow();
+    expect(() => addTicketTagsInput.parse({ id: 1, tags: [] })).toThrow();
+    expect(() => addTicketTagsInput.parse({ id: 1, tags: [""] })).toThrow();
+    expect(() => addTicketTagsInput.parse({ id: 0, tags: ["a"] })).toThrow();
+    expect(addTicketTagsInput.parse({ id: 1, tags: ["escalated"] })).toEqual({
+      id: 1,
+      tags: ["escalated"],
+    });
   });
 
   it("zd_list_ticket_fields takes no arguments", () => {
