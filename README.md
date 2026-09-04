@@ -2,7 +2,7 @@
 
 Local [MCP](https://modelcontextprotocol.io/) server that exposes Zendesk Support, Macros, attachments, and Help Center reads to Claude Desktop or Claude Code.
 
-24 tools across Support API (search, tickets, users, organizations, macros, attachments, reporting) and the Zendesk Guide Help Center (search, articles, sections).
+25 tools across Support API (search, tickets, users, organizations, macros, attachments, reporting) and the Zendesk Guide Help Center (search, articles, sections).
 
 ## Install
 
@@ -91,7 +91,7 @@ If your config still uses the older bare `npx -y @sniebauer/zendesk-mcp` form, n
 
 4. **Fully quit and reopen Claude Desktop** — not just close the window (macOS: `⌘Q`, or Claude menu → Quit).
 
-5. **Verify.** Start a new chat and check the tools/connector icon near the message box (or **Settings → Developer**) — `zendesk` should show as connected with 24 tools.
+5. **Verify.** Start a new chat and check the tools/connector icon near the message box (or **Settings → Developer**) — `zendesk` should show as connected with 25 tools.
 
 ### Claude Code
 
@@ -109,7 +109,7 @@ Restart Claude Code, then run `/mcp` to confirm `zendesk` is connected.
 
 Updating does not touch authentication; your existing credentials keep working.
 
-## Tools (24)
+## Tools (25)
 
 **Search / read**
 - `zd_search` — generic Zendesk search (e.g. `type:ticket status:open`)
@@ -119,7 +119,38 @@ Updating does not touch authentication; your existing credentials keep working.
 
 **Write tickets**
 - `zd_create_ticket`, `zd_update_ticket`, `zd_add_ticket_comment`
+- `zd_add_ticket_tags` — add tags **additively**, leaving the ticket's existing tags in place
+- `zd_update_ticket` writes `status`, `priority`, `assignee_id`, `group_id`, `type`, `problem_id`, `ticket_form_id`, `tags`, and `custom_fields`
 - `zd_update_ticket` supports `custom_fields: [{id, value}]` for direct custom-field updates (preferred over tag-based workarounds; use `null` to clear a field). Use `zd_list_ticket_fields` to look up a field's id by name.
+
+### Problems and incidents
+
+`zd_update_ticket` can write the fields that link tickets together, which is what an escalation flow needs:
+
+| Field | Use |
+| --- | --- |
+| `type` | `question` / `incident` / `problem` / `task`. Set `problem` to turn a ticket into a Problem other tickets hang off. |
+| `problem_id` | The Problem ticket an incident belongs to. Pass `null` to detach. |
+| `group_id` | Reassign the ticket to a group. |
+| `ticket_form_id` | Switch the ticket's form. |
+
+Zendesk only accepts `problem_id` on an incident, so set both in one call when converting a ticket:
+
+```json
+{ "id": 275807, "type": "incident", "problem_id": 274924 }
+```
+
+Passing `problem_id` alongside any other `type` is rejected up front rather than coming back as an opaque `RecordInvalid`. Changing `ticket_form_id` changes which fields are required — set any newly required field in the same call, or Zendesk will reject the update.
+
+### Adding tags without losing the existing ones
+
+`zd_update_ticket`'s `tags` **replaces** the ticket's entire tag set: anything not in the list is removed. That is Zendesk's behavior, and it is an easy way to silently wipe a ticket's tags. Use `zd_add_ticket_tags` instead when you mean "add":
+
+```json
+{ "id": 275807, "tags": ["escalated", "val_filed"] }
+```
+
+It goes through Zendesk's additive endpoint (`PUT /tickets/{id}/tags.json`) and returns the ticket's resulting tag list. Unlike the automatic usage tagging below, a failure here is surfaced as an error — a tag call that quietly adds nothing is the failure mode this exists to prevent.
 
 **Reporting**
 - `zd_list_view_tickets`, `zd_incremental_tickets`
@@ -177,7 +208,7 @@ Tickets this server touches are tagged automatically, so adoption can be measure
 | Tag | Applied by |
 | --- | --- |
 | `ai_reviewed` | `zd_get_ticket`, `zd_apply_macro_to_ticket` |
-| `ai_actioned` | `zd_update_ticket`, `zd_add_ticket_comment`, `zd_create_ticket` |
+| `ai_actioned` | `zd_update_ticket`, `zd_add_ticket_comment`, `zd_add_ticket_tags`, `zd_create_ticket` |
 
 Count usage with a Zendesk search: `tags:ai_actioned`, or `tags:ai_reviewed -tags:ai_actioned` for tickets that were only read. A ticket that was written to has usually been read first, so it will normally carry both tags.
 
